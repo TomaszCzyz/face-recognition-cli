@@ -1,0 +1,17 @@
+[package]
+name = "face-recognition-cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "face-recognition-cli"
+path = "src/main.rs"
+
+[workspace]
+members = [
+    "crates/*"
+]
+
+[dependencies]
+dlib_wrappers = { path = "crates/dlib_wrappers" }
+image = "0.23.4"
