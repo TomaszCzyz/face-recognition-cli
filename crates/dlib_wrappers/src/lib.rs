@@ -13,20 +13,20 @@
 //! To determine if two face encodings belong to the same face, the Euclidean distance between them can be used.
 //! For the dlib encodings, a distance of 0.6 is generally appropriate.
 
-#![recursion_limit="1024"]
+#![recursion_limit = "1024"]
 #[macro_use]
 extern crate cpp;
 extern crate image;
 
-pub mod image_matrix;
 pub mod face_detection;
-pub mod landmark_prediction;
 pub mod face_encoding;
+pub mod image_matrix;
+pub mod landmark_prediction;
 
 pub use image_matrix::*;
 
-use std::path::*;
 use std::ffi::*;
+use std::path::*;
 
 fn path_as_cstring(path: &Path) -> Result<CString, String> {
     if !path.exists() {
@@ -42,7 +42,7 @@ fn path_as_cstring(path: &Path) -> Result<CString, String> {
 /// A 2D Point.
 pub struct Point {
     pub x: i64,
-    pub y: i64
+    pub y: i64,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -52,10 +52,10 @@ pub struct Rectangle {
     pub left: u64,
     pub top: u64,
     pub right: u64,
-    pub bottom: u64
+    pub bottom: u64,
 }
 
-cpp!{{
+cpp! {{
     #include <dlib/image_processing/frontal_face_detector.h>
     #include <dlib/image_processing/full_object_detection.h>
     #include <dlib/dnn.h>
@@ -104,17 +104,12 @@ cpp!{{
 
     using face_detection_cnn = loss_mmod<con<1,9,9,1,1,rcon5<rcon5<rcon5<downsampler<input_rgb_image_pyramid<pyramid_down<6>>>>>>>>;
 
-    // misc
-
-    // todo: I am unsure if having rnd as a global here is thread safe.
-
-    dlib::rand rnd;
-
     // https://github.com/davisking/dlib/blob/master/tools/python/src/face_recognition.cpp#L131
     std::vector<matrix<rgb_pixel>> jitter_image(const matrix<rgb_pixel>& img, const int num_jitters) {
+        dlib::rand local_rnd;
         std::vector<matrix<rgb_pixel>> crops;
         for (int i = 0; i < num_jitters; ++i) {
-            crops.push_back(dlib::jitter_image(img, rnd));
+            crops.push_back(dlib::jitter_image(img, local_rnd));
         }
         return crops;
     }
@@ -140,5 +135,5 @@ fn test_point() {
         })
     };
 
-    assert_eq!(point, Point {x: -1000, y: -1000});
+    assert_eq!(point, Point { x: -1000, y: -1000 });
 }

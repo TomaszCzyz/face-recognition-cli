@@ -13,5 +13,6 @@ members = [
 ]
 
 [dependencies]
+clap = { version = "4.5.42", features = ["cargo"] }
 dlib_wrappers = { path = "crates/dlib_wrappers" }
 image = "0.23.4"

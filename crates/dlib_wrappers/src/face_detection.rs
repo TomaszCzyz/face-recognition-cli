@@ -1,7 +1,11 @@
-use crate::{path_as_cstring, ImageMatrix, Rectangle};
+use crate::{ImageMatrix, Rectangle, path_as_cstring};
 use std::ops::*;
 use std::path::*;
 use std::{fmt, slice};
+
+pub trait FaceDetectorModel {
+    fn face_locations(&self, image: &ImageMatrix) -> FaceLocations;
+}
 
 cpp_class!(unsafe struct FaceDetectorInner as "frontal_face_detector");
 
@@ -27,9 +31,11 @@ impl FaceDetector {
 
         Self { inner }
     }
+}
 
+impl FaceDetectorModel for FaceDetector {
     /// Detect face rectangles from an image.
-    pub fn face_locations(&self, image: &ImageMatrix) -> FaceLocations {
+    fn face_locations(&self, image: &ImageMatrix) -> FaceLocations {
         let detector = &self.inner;
 
         unsafe {
@@ -86,8 +92,10 @@ impl FaceDetectorCnn {
             Ok(Self { inner })
         }
     }
+}
 
-    pub fn face_locations(&self, image: &ImageMatrix) -> FaceLocations {
+impl FaceDetectorModel for FaceDetectorCnn {
+    fn face_locations(&self, image: &ImageMatrix) -> FaceLocations {
         let detector = &self.inner;
 
         unsafe {
