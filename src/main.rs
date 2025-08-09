@@ -78,6 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     persons_registry.save();
     provider.shutdown()?;
+    // let t = provider.shutdown();
 
     Ok(())
 }

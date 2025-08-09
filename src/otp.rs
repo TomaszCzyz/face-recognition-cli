@@ -1,6 +1,7 @@
 use once_cell::sync::Lazy;
 use opentelemetry::global;
 use opentelemetry::metrics::Histogram;
+use opentelemetry_otlp::{Protocol, WithExportConfig};
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 
 pub(crate) static HISTOGRAM_F_D: Lazy<Histogram<u64>> = Lazy::new(|| {
@@ -32,9 +33,18 @@ pub(crate) static HISTOGRAM_F_E: Lazy<Histogram<u64>> = Lazy::new(|| {
 
 pub fn init_metrics() -> SdkMeterProvider {
     let exporter = opentelemetry_stdout::MetricExporter::default();
-    let provider = SdkMeterProvider::builder()
-        .with_periodic_exporter(exporter)
-        .build();
+    let mut provider_builder = SdkMeterProvider::builder().with_periodic_exporter(exporter);
+
+    if let Ok(exporter) = opentelemetry_otlp::MetricExporter::builder()
+        .with_http()
+        .with_protocol(Protocol::HttpBinary)
+        .with_endpoint("http://localhost:9090/api/v1/otlp/v1/metrics")
+        .build()
+    {
+        provider_builder = provider_builder.with_periodic_exporter(exporter);
+    }
+
+    let provider = provider_builder.build();
 
     global::set_meter_provider(provider.clone());
     provider
