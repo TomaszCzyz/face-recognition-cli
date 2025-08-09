@@ -1,18 +1,19 @@
 //! Face encoding structs.
 
-use std::path::*;
-use std::ops::*;
-use std::slice;
-use std::fmt;
-use crate::{path_as_cstring, ImageMatrix};
 use crate::landmark_prediction::FaceLandmarks;
+use crate::{ImageMatrix, path_as_cstring};
+use std::fmt;
+use std::hash::{Hash, Hasher};
+use std::ops::*;
+use std::path::*;
+use std::slice;
 
 cpp_class!(unsafe struct FaceEncodingNetworkInner as "face_encoding_nn");
 
 /// A face encoding network.
 #[derive(Clone)]
 pub struct FaceEncodingNetwork {
-    inner: FaceEncodingNetworkInner
+    inner: FaceEncodingNetworkInner,
 }
 
 impl FaceEncodingNetwork {
@@ -37,16 +38,24 @@ impl FaceEncodingNetwork {
         };
 
         if !deserialized {
-            Err(format!("Failed to deserialize '{}'", filename.as_ref().display()))
+            Err(format!(
+                "Failed to deserialize '{}'",
+                filename.as_ref().display()
+            ))
         } else {
-            Ok(Self {inner})
+            Ok(Self { inner })
         }
     }
 
     /// Get a number of face encodings from an image and a list of landmarks, and jitter them a certain amount.
     ///
     /// It is recommended to keep `num_jitters` at 0 unless you know what you're doing.
-    pub fn get_face_encodings(&self, image: &ImageMatrix, landmarks: &[FaceLandmarks], num_jitters: u32) -> FaceEncodings {
+    pub fn get_face_encodings(
+        &self,
+        image: &ImageMatrix,
+        landmarks: &[FaceLandmarks],
+        num_jitters: u32,
+    ) -> FaceEncodings {
         let num_faces = landmarks.len();
         let landmarks = landmarks.as_ptr();
         let net = &self.inner;
@@ -130,10 +139,121 @@ impl Deref for FaceEncodings {
 
 cpp_class!(unsafe struct FaceEncodingInner as "matrix<double,0,1>");
 
+impl PartialEq<Self> for FaceEncodingInner {
+    fn eq(&self, other: &Self) -> bool {
+        let len_self = unsafe {
+            cpp!([self as "matrix<double,0,1>*"] -> usize as "size_t" {
+                return self->size();
+            })
+        };
+
+        let len_other = unsafe {
+            cpp!([other as "matrix<double,0,1>*"] -> usize as "size_t" {
+                return other->size();
+            })
+        };
+
+        if len_self != len_other {
+            return false;
+        }
+
+        if len_self == 0 {
+            return true;
+        }
+
+        unsafe {
+            let pointer_self = cpp!([self as "matrix<double,0,1>*"] -> *const f64 as "double*" {
+                return &(*self)(0);
+            });
+            let pointer_other = cpp!([other as "matrix<double,0,1>*"] -> *const f64 as "double*" {
+                return &(*other)(0);
+            });
+
+            let slice_self = slice::from_raw_parts(pointer_self, len_self);
+            let slice_other = slice::from_raw_parts(pointer_other, len_other);
+            slice_self.eq(slice_other)
+        }
+    }
+}
+
+impl Eq for FaceEncodingInner {}
+
+impl Hash for FaceEncodingInner {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let len = unsafe {
+            cpp!([self as "matrix<double,0,1>*"] -> usize as "size_t" {
+                return self->size();
+            })
+        };
+
+        len.hash(state);
+
+        if len > 0 {
+            unsafe {
+                let pointer = cpp!([self as "matrix<double,0,1>*"] -> *const f64 as "double*" {
+                    return &(*self)(0);
+                });
+                let slice = slice::from_raw_parts(pointer, len);
+
+                // Hash each f64 by converting its bits to u64 (which implements Hash)
+                for &value in slice {
+                    state.write_u64(value.to_bits());
+                }
+            }
+        }
+    }
+
+    fn hash_slice<H: Hasher>(data: &[Self], state: &mut H)
+    where
+        Self: Sized,
+    {
+        for item in data {
+            item.hash(state);
+        }
+    }
+}
+
 /// A wrapper around a `matrix<double,0,1>>`, an encoding.
-#[derive(Clone)]
+#[derive(Hash, Eq)]
 pub struct FaceEncoding {
-    inner: FaceEncodingInner
+    inner: FaceEncodingInner,
+}
+
+impl Clone for FaceEncoding {
+    fn clone(&self) -> Self {
+        Self::new(self.to_vec())
+    }
+}
+
+impl FaceEncoding {
+    pub fn to_vec(&self) -> Vec<f64> {
+        self.deref().to_vec()
+    }
+
+    pub fn new(encoding: Vec<f64>) -> Self {
+        // dlib face encodings are 128-dim; keep this invariant explicit.
+        debug_assert_eq!(encoding.len(), 128, "face encoding length must be 128");
+
+        let len = encoding.len();
+        let ptr = encoding.as_ptr();
+
+        let inner = unsafe {
+            cpp!([ptr as "const double*", len as "size_t"] -> FaceEncodingInner as "matrix<double,0,1>" {
+                matrix<double,0,1> inner;
+                inner.set_size(len);
+
+                const double* data = ptr;
+                for (size_t i = 0; i < len; ++i) {
+                    inner(i) = data[i];
+                }
+
+                return inner;
+            })
+        };
+
+        // Safe: C++ copied the values; Rust can drop `encoding` now.
+        Self { inner }
+    }
 }
 
 impl FaceEncoding {
@@ -153,9 +273,7 @@ impl FaceEncoding {
             })
         };
 
-        Self {
-            inner
-        }
+        Self { inner }
     }
 
     /// Calculate the euclidean distance between two encodings.
@@ -209,30 +327,32 @@ impl PartialEq for FaceEncoding {
     }
 }
 
-#[test]
-fn encoding_test() {
-    let encoding_a = FaceEncoding::new_from_scalar(0.0);
-    let encoding_b = FaceEncoding::new_from_scalar(1.0);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    assert_eq!(encoding_a, encoding_a);
-    assert_ne!(encoding_a, encoding_b);
+    #[test]
+    fn encoding_test() {
+        let encoding_a = FaceEncoding::new_from_scalar(0.0);
+        let encoding_b = FaceEncoding::new_from_scalar(1.0);
 
-    assert_eq!(encoding_a.distance(&encoding_b), 128.0_f64.sqrt());
-}
+        assert_eq!(encoding_a, encoding_a);
+        assert_ne!(encoding_a, encoding_b);
 
-#[test]
-fn test_default_encoding() {
-    let encodings = FaceEncodings::default();
-    assert!(encodings.is_empty());
-    assert_eq!(encodings.len(), 0);
-    assert_eq!(encodings.get(0), None);
-}
+        assert_eq!(encoding_a.distance(&encoding_b), 128.0_f64.sqrt());
+    }
 
-#[test]
-fn test_sizes() {
-    use std::mem::*;
-    assert_eq!(
-        size_of::<FaceEncodings>(),
-        size_of::<Vec<FaceEncoding>>()
-    );
+    #[test]
+    fn test_default_encoding() {
+        let encodings = FaceEncodings::default();
+        assert!(encodings.is_empty());
+        assert_eq!(encodings.len(), 0);
+        assert_eq!(encodings.get(0), None);
+    }
+
+    #[test]
+    fn test_sizes() {
+        use std::mem::*;
+        assert_eq!(size_of::<FaceEncodings>(), size_of::<Vec<FaceEncoding>>());
+    }
 }
