@@ -1,12 +1,6 @@
 #![allow(dead_code)]
-
-mod file_person_registry;
-mod otp;
-mod person_registry;
-mod sqlite_person_registry;
-
-use crate::file_person_registry::FilePersonRegistry;
 use crate::otp::{HISTOGRAM_F_D, HISTOGRAM_F_E, HISTOGRAM_L_P, init_metrics};
+use crate::person_registry::person_registry_file::PersonRegistryFile;
 use directories::ProjectDirs;
 use dlib_wrappers::face_detection::{FaceDetectorCnn, FaceDetectorModel};
 use dlib_wrappers::face_encoding::FaceEncodingNetwork;
@@ -18,6 +12,10 @@ use opentelemetry::metrics::MeterProvider;
 use std::path::PathBuf;
 use std::time::Instant;
 use uuid::Uuid;
+
+mod face_recognizer;
+mod otp;
+mod person_registry;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let provider = init_metrics();
@@ -41,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         panic!("Failed to get project dirs");
     };
 
-    let mut persons_registry = FilePersonRegistry::new(&file_name);
+    let mut persons_registry = PersonRegistryFile::new(&file_name);
 
     let matches = cmd.get_matches();
     match matches.subcommand() {
@@ -96,7 +94,7 @@ fn get_output_path(input: &PathBuf) -> PathBuf {
 fn detect_and_mark(
     image: &mut RgbImage,
     models: &DefaultModels,
-    persons_registry: &mut FilePersonRegistry,
+    persons_registry: &mut PersonRegistryFile,
 ) {
     let start = Instant::now();
     println!("starting...");

@@ -5,15 +5,14 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-pub struct FilePersonRegistry {
+pub struct PersonRegistryFile {
     storage_path: PathBuf,
     registry: HashMap<FaceEncoding, String>,
-
     // encoding -> name
     // name -> Vec<encoding>
 }
 
-impl FilePersonRegistry {
+impl PersonRegistryFile {
     pub(crate) fn new(path: &PathBuf) -> Self {
         if path.exists() {
             Self::read_from_file(path)
