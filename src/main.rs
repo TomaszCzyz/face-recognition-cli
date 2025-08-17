@@ -1,24 +1,42 @@
 #![allow(dead_code)]
-use crate::otp::{HISTOGRAM_F_D, HISTOGRAM_F_E, HISTOGRAM_L_P, init_metrics};
+use crate::image_helpers::{draw_point, draw_rectangle};
+use crate::otp::{init_metrics, HISTOGRAM_F_D, HISTOGRAM_F_E, HISTOGRAM_L_P};
 use crate::person_registry::person_registry_file::PersonRegistryFile;
 use directories::ProjectDirs;
 use dlib_wrappers::face_detection::{FaceDetectorCnn, FaceDetectorModel};
 use dlib_wrappers::face_encoding::FaceEncodingNetwork;
 use dlib_wrappers::landmark_prediction::LandmarkPredictor;
-use dlib_wrappers::{ImageMatrix, Point, Rectangle};
-use image::{Rgb, RgbImage, open};
-use opentelemetry::KeyValue;
+use dlib_wrappers::ImageMatrix;
+use image::{open, Rgb, RgbImage};
+use once_cell::sync::Lazy;
 use opentelemetry::metrics::MeterProvider;
+use opentelemetry::KeyValue;
 use std::path::PathBuf;
 use std::time::Instant;
+use log::info;
 use uuid::Uuid;
 
 mod face_recognizer;
+mod image_helpers;
 mod otp;
 mod person_registry;
 
+static PROJECT_DIRS: Lazy<ProjectDirs> = Lazy::new(|| {
+    ProjectDirs::from("com", "example", "face-recognizer")
+        .expect("failed to determine project directories")
+});
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // force early init of the project dirs to handle panic
+    let _ = PROJECT_DIRS.data_dir();
+
     let provider = init_metrics();
+
+    let models = DefaultModels::default();
+
+    let file_name = PROJECT_DIRS.data_dir().push("persons_registry.csv");
+
+    let mut persons_registry = PersonRegistryFile::new(&file_name);
 
     let cmd = clap::Command::new("face-recognizer")
         .subcommand_required(true)
@@ -29,17 +47,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 clap::arg!(--"names-path" <PATH>).value_parser(clap::value_parser!(PathBuf)),
             ]),
         );
-
-    let models = DefaultModels::default();
-
-    let file_name = if let Some(proj_dirs) = ProjectDirs::from("com", "Example", "face-recognizer")
-    {
-        proj_dirs.data_dir().join("persons_registry.csv")
-    } else {
-        panic!("Failed to get project dirs");
-    };
-
-    let mut persons_registry = PersonRegistryFile::new(&file_name);
 
     let matches = cmd.get_matches();
     match matches.subcommand() {
@@ -53,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 {
                     let path = &dir_entry.unwrap().path();
 
-                    println!("processing: {:?}", path);
+                    info!("processing: {:?}", path);
                     let mut image = open(path).unwrap().to_rgb8();
 
                     detect_and_mark(&mut image, &models, &mut persons_registry);
@@ -76,7 +83,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     persons_registry.save();
     provider.shutdown()?;
-    // let t = provider.shutdown();
 
     Ok(())
 }
@@ -88,6 +94,7 @@ fn get_output_path(input: &PathBuf) -> PathBuf {
         .parent()
         .unwrap()
         .join(format!("{}_new.{}", input_filename, input_ext));
+
     output
 }
 
@@ -158,22 +165,6 @@ fn detect_and_mark(
     }
 
     println!("finished {:?}", start.elapsed());
-}
-
-fn draw_rectangle(image: &mut RgbImage, rect: &Rectangle, colour: Rgb<u8>) {
-    for x in rect.left..rect.right {
-        image.put_pixel(x as u32, rect.top as u32, colour);
-        image.put_pixel(x as u32, rect.bottom as u32, colour);
-    }
-
-    for y in rect.top..rect.bottom {
-        image.put_pixel(rect.left as u32, y as u32, colour);
-        image.put_pixel(rect.right as u32, y as u32, colour);
-    }
-}
-
-fn draw_point(image: &mut RgbImage, point: &Point, colour: Rgb<u8>) {
-    image.put_pixel(point.x as u32, point.y as u32, colour);
 }
 
 struct DefaultModels {

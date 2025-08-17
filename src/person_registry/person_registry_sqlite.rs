@@ -1,5 +1,11 @@
+use crate::PROJECT_DIRS;
 use crate::person_registry::person_registry::PersonRegistry;
 use dlib_wrappers::face_encoding::FaceEncoding;
+use sqlite_vec::sqlite3_vec_init;
+use sqlx::{Pool, Sqlite, sqlite::SqlitePoolOptions};
+use std::fs::OpenOptions;
+
+type Db = Pool<Sqlite>;
 
 struct PersonRegistrySqlite {}
 
@@ -14,5 +20,67 @@ impl PersonRegistry for PersonRegistrySqlite {
 
     fn save(&self) {
         todo!()
+    }
+}
+
+impl PersonRegistrySqlite {
+    fn initialize(&mut self) {}
+
+    async fn setup_db() -> Db {
+        let mut path = PROJECT_DIRS.data_dir();
+
+        // match std::fs::create_dir_all(path.clone()) {
+        //     Ok(_) => {}
+        //     Err(err) => {
+        //         panic!("error creating directory {}", err);
+        //     }
+        // };
+
+        path.push("db.sqlite");
+
+        let result = OpenOptions::new().create(true).write(true).open(&path);
+
+        match result {
+            Ok(_) => println!("database file created"),
+            Err(err) => panic!("error creating database file {}", err),
+        }
+
+        unsafe {
+            libsqlite3_sys::sqlite3_auto_extension(Some(std::mem::transmute(
+                sqlite3_vec_init as *const (),
+            )));
+        }
+
+        let db = SqlitePoolOptions::new()
+            .connect(path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        // sqlx::migrate!("./migrations").run(&db).await.unwrap();
+
+        let version: (String,) = sqlx::query_as("SELECT sqlite_version();")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+
+        let vec_version: (String,) = sqlx::query_as("SELECT vec_version();")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+
+        println!("sqlite version: {:?}", version);
+        println!("vec version: {:?}", vec_version);
+
+        sqlx::query(
+            "
+            PRAGMA busy_timeout = 60000;
+            PRAGMA journal_mode = WAL;
+        ",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        db
     }
 }
