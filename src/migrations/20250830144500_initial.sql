@@ -1,0 +1,6 @@
+CREATE TABLE ProcessedFiles
+(
+    Id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    Hash        TEXT UNIQUE,
+    ProcessedAt DATETIME DEFAULT (CURRENT_TIMESTAMP)
+);

@@ -5,6 +5,7 @@ use sqlite_vec::sqlite3_vec_init;
 use sqlx::{Pool, Sqlite, sqlite::SqlitePoolOptions};
 use std::fs;
 use std::fs::OpenOptions;
+use log::info;
 
 type Db = Pool<Sqlite>;
 
@@ -14,8 +15,10 @@ pub(crate) struct PersonRegistrySqlite {
 
 impl PersonRegistry for PersonRegistrySqlite {
     /// Gets all encodings with distance lower then threshold from provided encoding
-    fn get(&self, encoding: &FaceEncoding) -> Option<&String> {
-        todo!()
+    fn get(&self, encoding: &FaceEncoding) -> Option<String> {
+        let string = "asd".to_string();
+        Some(string)
+        // todo!()
     }
 
     fn add(&mut self, encoding: FaceEncoding, name: String) {
@@ -60,7 +63,9 @@ impl PersonRegistrySqlite {
             .await
             .unwrap();
 
-        // sqlx::migrate!("./migrations").run(&db).await.unwrap();
+        info!("Executing migrations...");
+        println!("Executing migrations...");
+        sqlx::migrate!("./src/migrations").run(&db).await.unwrap();
 
         let version: (String,) = sqlx::query_as("SELECT sqlite_version();")
             .fetch_one(&db)
