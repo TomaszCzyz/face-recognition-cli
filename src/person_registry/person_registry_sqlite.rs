@@ -1,8 +1,10 @@
 use crate::PROJECT_DIRS;
 use crate::person_registry::person_registry::PersonRegistry;
+use blake3::Hash;
 use dlib_wrappers::face_encoding::FaceEncoding;
 use sqlite_vec::sqlite3_vec_init;
-use sqlx::{Pool, Sqlite, sqlite::SqlitePoolOptions};
+use sqlx::types::chrono::{DateTime, Utc};
+use sqlx::{FromRow, Pool, Sqlite, sqlite::SqlitePoolOptions};
 use std::fs;
 use std::fs::OpenOptions;
 use tracing::info;
@@ -13,16 +15,52 @@ pub(crate) struct PersonRegistrySqlite {
     db: Db,
 }
 
-impl PersonRegistry for PersonRegistrySqlite {
+#[derive(FromRow)]
+pub struct ProcessedFileInsert {
+    pub hash: Hash,
+    pub path: String,
+}
+
+impl PersonRegistrySqlite {
+    pub async fn find_file(&self, hash: &Hash) -> Option<(i32, String, DateTime<Utc>)> {
+        let maybe_hash: Option<(i32, String, DateTime<Utc>)> =
+            sqlx::query_as("SELECT Id, Path, ProcessedAt FROM ProcessedFiles WHERE Hash = $1")
+                .bind(&hash.as_bytes()[..])
+                .fetch_optional(&self.db)
+                .await
+                .unwrap();
+
+        maybe_hash
+    }
+
+    pub async fn add_file(&self, file: ProcessedFileInsert) -> Option<bool> {
+        info!("inserting a new hash for file {}", file.path);
+        let _ = sqlx::query("INSERT INTO ProcessedFiles (Hash, Path) VALUES ($1, $2)")
+            .bind(&file.hash.as_bytes()[..])
+            .bind(&file.path)
+            .execute(&self.db)
+            .await
+            .unwrap();
+
+        Some(true)
+    }
+
     /// Gets all encodings with distance lower than a threshold from provided encoding
-    fn get(&self, encoding: &FaceEncoding) -> Option<String> {
+    pub fn get(&self, encoding: &FaceEncoding) -> Option<String> {
         let string = "asd".to_string();
         Some(string)
         // todo!()
     }
 
-    fn add(&mut self, encoding: FaceEncoding, name: String) {
-        todo!()
+    pub fn add_encoding(&mut self, encoding: FaceEncoding, hash: Hash) {
+        info!("inserting a new encoding");
+
+        // let _ = sqlx::query("INSERT INTO ProcessedFiles (Hash, Path) VALUES ($1, $2)")
+        //     .bind(&file.hash.as_bytes()[..])
+        //     .bind(&file.path)
+        //     .execute(&self.db)
+        //     .await
+        //     .unwrap();
     }
 }
 
