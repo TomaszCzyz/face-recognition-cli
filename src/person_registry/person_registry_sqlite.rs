@@ -5,7 +5,7 @@ use sqlite_vec::sqlite3_vec_init;
 use sqlx::{Pool, Sqlite, sqlite::SqlitePoolOptions};
 use std::fs;
 use std::fs::OpenOptions;
-use log::info;
+use tracing::info;
 
 type Db = Pool<Sqlite>;
 
@@ -14,7 +14,7 @@ pub(crate) struct PersonRegistrySqlite {
 }
 
 impl PersonRegistry for PersonRegistrySqlite {
-    /// Gets all encodings with distance lower then threshold from provided encoding
+    /// Gets all encodings with distance lower than a threshold from provided encoding
     fn get(&self, encoding: &FaceEncoding) -> Option<String> {
         let string = "asd".to_string();
         Some(string)

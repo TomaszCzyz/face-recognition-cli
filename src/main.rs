@@ -2,11 +2,19 @@
 use crate::face_recognizer::FaceRecognizer;
 use crate::person_registry::person_registry_sqlite::PersonRegistrySqlite;
 use directories::ProjectDirs;
-use dlib_wrappers::face_detection::{FaceDetectorCnn};
+use dlib_wrappers::face_detection::FaceDetectorCnn;
 use dlib_wrappers::face_encoding::FaceEncodingNetwork;
 use dlib_wrappers::landmark_prediction::LandmarkPredictor;
+use indicatif::ProgressState;
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
+use std::time::Duration;
+use tracing::level_filters::LevelFilter;
+use tracing_indicatif::IndicatifLayer;
+use tracing_indicatif::style::ProgressStyle;
+use tracing_subscriber::fmt::format;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 mod face_recognizer;
 mod image_helpers;
@@ -18,17 +26,70 @@ static PROJECT_DIRS: Lazy<ProjectDirs> = Lazy::new(|| {
         .expect("failed to determine project directories")
 });
 
+fn elapsed_subsec(state: &ProgressState, writer: &mut dyn std::fmt::Write) {
+    let seconds = state.elapsed().as_secs();
+    let sub_seconds = (state.elapsed().as_millis() % 1000) / 100;
+    let _ = writer.write_str(&format!("{}.{}s", seconds, sub_seconds));
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // force early init of the project dirs to handle panic
     let _ = PROJECT_DIRS.data_dir();
 
+    let indicatif_layer = IndicatifLayer::new().with_progress_style(
+        ProgressStyle::with_template(
+            "{color_start}{span_child_prefix}{span_fields} -- {span_name} {wide_msg} {elapsed_subsec}{color_end}",
+        )
+            .unwrap()
+            .with_key(
+                "elapsed_subsec",
+                elapsed_subsec,
+            )
+            .with_key(
+                "color_start",
+                |state: &ProgressState, writer: &mut dyn std::fmt::Write| {
+                    let elapsed = state.elapsed();
+
+                    if elapsed > Duration::from_secs(8) {
+                        // Red
+                        let _ = write!(writer, "\x1b[{}m", 1 + 30);
+                    } else if elapsed > Duration::from_secs(4) {
+                        // Yellow
+                        let _ = write!(writer, "\x1b[{}m", 3 + 30);
+                    }
+                },
+            )
+            .with_key(
+                "color_end",
+                |state: &ProgressState, writer: &mut dyn std::fmt::Write| {
+                    if state.elapsed() > Duration::from_secs(4) {
+                        let _ =write!(writer, "\x1b[0m");
+                    }
+                },
+            ),
+    ).with_span_child_prefix_symbol("↳ ").with_span_child_prefix_indent(" ");
+
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(indicatif_layer.get_stderr_writer())
+                .event_format(
+                    format()
+                        .with_level(false)
+                        .with_target(false)
+                        .without_time()
+                        .with_source_location(false),
+                ),
+        )
+        .with(indicatif_layer)
+        .with(LevelFilter::INFO)
+        .init();
+
     // let provider = init_metrics();
 
     let models = DefaultModels::default();
-
     let persons_registry = PersonRegistrySqlite::initialize().await;
-
     let mut recognizer = FaceRecognizer::new(models, persons_registry);
 
     let cmd = clap::Command::new("face-recognizer")
@@ -41,24 +102,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ]),
         );
 
-    let matches = cmd.get_matches();
-    match matches.subcommand() {
+    match cmd.get_matches().subcommand() {
         Some(("recognize", matches)) => {
             let input = matches.get_one::<PathBuf>("input").unwrap();
-            recognizer.process_file(&input);
-
-
-            if input.is_dir() {
-                for dir_entry in std::fs::read_dir(input)
-                    .unwrap()
-                    .filter(|x| x.as_ref().is_ok_and(|x| x.path().is_file()))
-                {
-                    let path = &dir_entry.unwrap().path();
-                    recognizer.process_file(&path);
-                }
-            } else if input.is_file() {
-                recognizer.process_file(&input);
-            }
+            recognizer.process_path(&input);
         }
         _ => unreachable!("clap should ensure we don't get here"),
     };

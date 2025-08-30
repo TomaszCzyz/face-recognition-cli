@@ -2,20 +2,29 @@ use crate::image_helpers::{draw_point, draw_rectangle};
 use crate::otel::{HISTOGRAM_F_D, HISTOGRAM_F_E, HISTOGRAM_L_P};
 use crate::person_registry::person_registry::PersonRegistry;
 use crate::{DefaultModels, get_output_path};
-use dlib_wrappers::ImageMatrix;
 use dlib_wrappers::face_detection::FaceDetectorModel;
+use dlib_wrappers::landmark_prediction::FaceLandmarks;
+use dlib_wrappers::{ImageMatrix, Rectangle};
 use image::{Rgb, RgbImage, open};
-use log::info;
 use opentelemetry::KeyValue;
+use std::fmt::{Debug, Formatter};
 use std::fs::DirEntry;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 use std::{fs, io};
+use tracing::{debug, info, instrument};
 use uuid::Uuid;
 
 pub struct FaceRecognizer {
     models: DefaultModels,
     person_registry: Box<dyn PersonRegistry>,
+}
+
+impl Debug for FaceRecognizer {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "FaceRecognizer")
+    }
 }
 
 impl FaceRecognizer {
@@ -40,30 +49,30 @@ impl FaceRecognizer {
         }
     }
 
+    #[instrument(skip(self), name = "processing file")]
     pub fn process_file(&mut self, input: &PathBuf) {
-        info!("processing: {:?}", input);
         let mut image = open(input).unwrap().to_rgb8();
 
-        self.detect_and_mark(&mut image);
+        self.detect(&mut image);
 
         let output = get_output_path(input);
         image.save(&output).unwrap();
     }
 
-    fn detect_and_mark(&mut self, image: &mut RgbImage) {
+    #[instrument(skip(self, image), name = "detecting faces")]
+    fn detect(&mut self, image: &mut RgbImage) {
         let start = Instant::now();
-        println!("starting...");
-
-        let color = Rgb([255, 0, 0]);
         let matrix = ImageMatrix::from_image(&image);
 
         let face_locations_start = Instant::now();
         let face_locations = self.models.face_detector.face_locations(&matrix);
-        println!(
+        info!(
             "found {:?} faces in {:?}",
             face_locations.len(),
             face_locations_start.elapsed()
         );
+
+        // todo: save face locations
 
         HISTOGRAM_F_D.record(
             face_locations_start.elapsed().as_millis() as u64,
@@ -71,49 +80,46 @@ impl FaceRecognizer {
         );
 
         for r in face_locations.iter() {
-            draw_rectangle(image, &r, color);
-
-            let landmarks_start = Instant::now();
-            let landmarks = self.models.landmarks_predictor.face_landmarks(&matrix, &r);
-            println!("finding landmarks took: {:?}", landmarks_start.elapsed());
-            HISTOGRAM_L_P.record(
-                landmarks_start.elapsed().as_millis() as u64,
-                &[KeyValue::new("file", "file_name")],
-            );
+            let landmarks = self.find_landmarks(&matrix, &r);
 
             let face_encoding_start = Instant::now();
             let encodings =
                 self.models
                     .face_encoding
                     .get_face_encodings(&matrix, &[landmarks.clone()], 0);
-            println!(
+            debug!(
                 "calculating encodings took: {:?}",
                 face_encoding_start.elapsed()
             );
-            let id = Uuid::new_v4();
+
             HISTOGRAM_F_E.record(
                 face_encoding_start.elapsed().as_millis() as u64,
-                &[
-                    KeyValue::new("file", "file_name"),
-                    KeyValue::new("id", id.to_string()),
-                ],
+                &[KeyValue::new("file", "file_name")],
             );
 
             for encoding in encodings.iter() {
                 if let Some(name) = self.person_registry.get(encoding) {
-                    println!("found person in registry: {}", name);
+                    debug!("found person in registry: {}", name);
                 } else {
                     let id = Uuid::new_v4();
                     self.person_registry.add(encoding.clone(), id.to_string());
                 }
             }
-
-            for point in landmarks.iter() {
-                draw_point(image, &point, color);
-            }
         }
 
-        println!("finished {:?}", start.elapsed());
+        info!("finished {:?}", start.elapsed());
+    }
+
+    fn find_landmarks(&mut self, matrix: &ImageMatrix, r: &Rectangle) -> FaceLandmarks {
+        let landmarks_start = Instant::now();
+        let landmarks = self.models.landmarks_predictor.face_landmarks(&matrix, &r);
+
+        HISTOGRAM_L_P.record(
+            landmarks_start.elapsed().as_millis() as u64,
+            &[KeyValue::new("file", "file_name")],
+        );
+
+        landmarks
     }
 }
 
