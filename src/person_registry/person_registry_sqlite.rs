@@ -3,13 +3,17 @@ use crate::person_registry::person_registry::PersonRegistry;
 use dlib_wrappers::face_encoding::FaceEncoding;
 use sqlite_vec::sqlite3_vec_init;
 use sqlx::{Pool, Sqlite, sqlite::SqlitePoolOptions};
+use std::fs;
 use std::fs::OpenOptions;
 
 type Db = Pool<Sqlite>;
 
-struct PersonRegistrySqlite {}
+pub(crate) struct PersonRegistrySqlite {
+    db: Db,
+}
 
 impl PersonRegistry for PersonRegistrySqlite {
+    /// Gets all encodings with distance lower then threshold from provided encoding
     fn get(&self, encoding: &FaceEncoding) -> Option<&String> {
         todo!()
     }
@@ -17,24 +21,24 @@ impl PersonRegistry for PersonRegistrySqlite {
     fn add(&mut self, encoding: FaceEncoding, name: String) {
         todo!()
     }
-
-    fn save(&self) {
-        todo!()
-    }
 }
 
 impl PersonRegistrySqlite {
-    fn initialize(&mut self) {}
+    pub async fn initialize() -> Self {
+        let db = PersonRegistrySqlite::setup_db().await;
+
+        Self { db }
+    }
 
     async fn setup_db() -> Db {
-        let mut path = PROJECT_DIRS.data_dir();
+        let mut path = PROJECT_DIRS.data_dir().to_path_buf();
 
-        // match std::fs::create_dir_all(path.clone()) {
-        //     Ok(_) => {}
-        //     Err(err) => {
-        //         panic!("error creating directory {}", err);
-        //     }
-        // };
+        match fs::create_dir_all(path.clone()) {
+            Ok(_) => {}
+            Err(err) => {
+                panic!("error creating directory {}", err);
+            }
+        };
 
         path.push("db.sqlite");
 

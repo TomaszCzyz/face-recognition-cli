@@ -1,3 +1,4 @@
+use crate::PROJECT_DIRS;
 use dlib_wrappers::face_encoding::FaceEncoding;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
@@ -13,9 +14,12 @@ pub struct PersonRegistryFile {
 }
 
 impl PersonRegistryFile {
-    pub(crate) fn new(path: &PathBuf) -> Self {
+    pub(crate) fn new() -> Self {
+        let mut path = PROJECT_DIRS.data_dir().to_path_buf();
+        path.push("persons_registry.csv");
+
         if path.exists() {
-            Self::read_from_file(path)
+            Self::read_from_file(path.as_path())
         } else {
             Self {
                 storage_path: PathBuf::from(path),

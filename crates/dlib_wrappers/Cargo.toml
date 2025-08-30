@@ -11,4 +11,5 @@ image = "0.23.4"
 
 [build-dependencies]
 cpp_build = "0.5.4"
+pkg-config = "0.3.32"
 

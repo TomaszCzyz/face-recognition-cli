@@ -1,24 +1,16 @@
 #![allow(dead_code)]
-use crate::image_helpers::{draw_point, draw_rectangle};
-use crate::otp::{init_metrics, HISTOGRAM_F_D, HISTOGRAM_F_E, HISTOGRAM_L_P};
-use crate::person_registry::person_registry_file::PersonRegistryFile;
+use crate::face_recognizer::FaceRecognizer;
+use crate::person_registry::person_registry_sqlite::PersonRegistrySqlite;
 use directories::ProjectDirs;
-use dlib_wrappers::face_detection::{FaceDetectorCnn, FaceDetectorModel};
+use dlib_wrappers::face_detection::{FaceDetectorCnn};
 use dlib_wrappers::face_encoding::FaceEncodingNetwork;
 use dlib_wrappers::landmark_prediction::LandmarkPredictor;
-use dlib_wrappers::ImageMatrix;
-use image::{open, Rgb, RgbImage};
 use once_cell::sync::Lazy;
-use opentelemetry::metrics::MeterProvider;
-use opentelemetry::KeyValue;
 use std::path::PathBuf;
-use std::time::Instant;
-use log::info;
-use uuid::Uuid;
 
 mod face_recognizer;
 mod image_helpers;
-mod otp;
+mod otel;
 mod person_registry;
 
 static PROJECT_DIRS: Lazy<ProjectDirs> = Lazy::new(|| {
@@ -26,17 +18,18 @@ static PROJECT_DIRS: Lazy<ProjectDirs> = Lazy::new(|| {
         .expect("failed to determine project directories")
 });
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // force early init of the project dirs to handle panic
     let _ = PROJECT_DIRS.data_dir();
 
-    let provider = init_metrics();
+    // let provider = init_metrics();
 
     let models = DefaultModels::default();
 
-    let file_name = PROJECT_DIRS.data_dir().push("persons_registry.csv");
+    let persons_registry = PersonRegistrySqlite::initialize().await;
 
-    let mut persons_registry = PersonRegistryFile::new(&file_name);
+    let mut recognizer = FaceRecognizer::new(models, persons_registry);
 
     let cmd = clap::Command::new("face-recognizer")
         .subcommand_required(true)
@@ -52,6 +45,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match matches.subcommand() {
         Some(("recognize", matches)) => {
             let input = matches.get_one::<PathBuf>("input").unwrap();
+            recognizer.process_file(&input);
+
 
             if input.is_dir() {
                 for dir_entry in std::fs::read_dir(input)
@@ -59,30 +54,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .filter(|x| x.as_ref().is_ok_and(|x| x.path().is_file()))
                 {
                     let path = &dir_entry.unwrap().path();
-
-                    info!("processing: {:?}", path);
-                    let mut image = open(path).unwrap().to_rgb8();
-
-                    detect_and_mark(&mut image, &models, &mut persons_registry);
-
-                    let output = get_output_path(path);
-                    image.save(&output).unwrap();
+                    recognizer.process_file(&path);
                 }
             } else if input.is_file() {
-                println!("processing: {:?}", input);
-                let mut image = open(input).unwrap().to_rgb8();
-
-                detect_and_mark(&mut image, &models, &mut persons_registry);
-
-                let output = get_output_path(input);
-                image.save(&output).unwrap();
+                recognizer.process_file(&input);
             }
         }
         _ => unreachable!("clap should ensure we don't get here"),
     };
 
-    persons_registry.save();
-    provider.shutdown()?;
+    // provider.shutdown()?;
 
     Ok(())
 }
@@ -96,75 +77,6 @@ fn get_output_path(input: &PathBuf) -> PathBuf {
         .join(format!("{}_new.{}", input_filename, input_ext));
 
     output
-}
-
-fn detect_and_mark(
-    image: &mut RgbImage,
-    models: &DefaultModels,
-    persons_registry: &mut PersonRegistryFile,
-) {
-    let start = Instant::now();
-    println!("starting...");
-
-    let color = Rgb([255, 0, 0]);
-    let matrix = ImageMatrix::from_image(&image);
-
-    let face_locations_start = Instant::now();
-    let face_locations = models.face_detector.face_locations(&matrix);
-    println!(
-        "found {:?} faces in {:?}",
-        face_locations.len(),
-        face_locations_start.elapsed()
-    );
-
-    HISTOGRAM_F_D.record(
-        face_locations_start.elapsed().as_millis() as u64,
-        &[KeyValue::new("file", "file_name")],
-    );
-
-    for r in face_locations.iter() {
-        draw_rectangle(image, &r, color);
-
-        let landmarks_start = Instant::now();
-        let landmarks = models.landmarks_predictor.face_landmarks(&matrix, &r);
-        println!("finding landmarks took: {:?}", landmarks_start.elapsed());
-        HISTOGRAM_L_P.record(
-            landmarks_start.elapsed().as_millis() as u64,
-            &[KeyValue::new("file", "file_name")],
-        );
-
-        let face_encoding_start = Instant::now();
-        let encodings = models
-            .face_encoding
-            .get_face_encodings(&matrix, &[landmarks.clone()], 0);
-        println!(
-            "calculating encodings took: {:?}",
-            face_encoding_start.elapsed()
-        );
-        let id = Uuid::new_v4();
-        HISTOGRAM_F_E.record(
-            face_encoding_start.elapsed().as_millis() as u64,
-            &[
-                KeyValue::new("file", "file_name"),
-                KeyValue::new("id", id.to_string()),
-            ],
-        );
-
-        for encoding in encodings.iter() {
-            if let Some(name) = persons_registry.get(encoding) {
-                println!("found person in registry: {}", name);
-            } else {
-                let id = Uuid::new_v4();
-                persons_registry.add(encoding.clone(), id.to_string());
-            }
-        }
-
-        for point in landmarks.iter() {
-            draw_point(image, &point, color);
-        }
-    }
-
-    println!("finished {:?}", start.elapsed());
 }
 
 struct DefaultModels {
