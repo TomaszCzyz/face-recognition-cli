@@ -7,12 +7,15 @@ use directories::ProjectDirs;
 use dlib_wrappers::face_detection::FaceDetectorCnn;
 use dlib_wrappers::face_encoding::FaceEncodingNetwork;
 use dlib_wrappers::landmark_prediction::LandmarkPredictor;
+use futures::stream::{self, StreamExt};
 use indicatif::ProgressState;
 use once_cell::sync::Lazy;
 use std::fs::DirEntry;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{fs, io};
+use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing::level_filters::LevelFilter;
 use tracing::{error, info};
@@ -113,9 +116,7 @@ async fn main_inner() -> Result<(), Box<dyn std::error::Error>> {
 
     // let provider = init_metrics();
 
-    let models = DefaultModels::default();
     let persons_registry = PersonRegistrySqlite::initialize().await;
-    let mut recognizer = FaceRecognizer::new(models, persons_registry.clone());
 
     let cmd = clap::Command::new("face-recognizer")
         .subcommand_required(true)
@@ -145,6 +146,11 @@ async fn main_inner() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             if input.is_dir() {
+                // Limit concurrency to something reasonable. You can tune this.
+                let max_concurrency = std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(1);
+                let semaphore = Arc::new(Semaphore::new(max_concurrency));
                 let mut join_set = JoinSet::new();
 
                 for entry in WalkDir::new(input)
@@ -153,10 +159,16 @@ async fn main_inner() -> Result<(), Box<dyn std::error::Error>> {
                     .filter(|e| e.path().is_file())
                 {
                     let sqlite = persons_registry.clone();
+                    let permit = semaphore.clone().acquire_owned().await.unwrap();
                     let path = entry.path().to_path_buf();
 
+                    let models = Arc::new(DefaultModels::default());
+
                     join_set.spawn(async move {
-                        let models = DefaultModels::default();
+                        // Hold the permit for the duration of the task
+                        let _permit = permit;
+                        let models = models.clone();
+
                         let mut recognizer = FaceRecognizer::new(models, sqlite);
 
                         recognizer.process_file(&path, options).await;
@@ -169,6 +181,9 @@ async fn main_inner() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             } else if input.is_file() {
+                let models = DefaultModels::default();
+                let mut recognizer = FaceRecognizer::new(models.into(), persons_registry.clone());
+
                 recognizer.process_file(&input, options).await;
             }
 

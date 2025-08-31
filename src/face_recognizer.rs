@@ -9,12 +9,13 @@ use image::{RgbImage, open};
 use opentelemetry::KeyValue;
 use std::fmt::{Debug, Formatter};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::fs;
 use tracing::{info, instrument};
 
 pub struct FaceRecognizer {
-    models: DefaultModels,
+    models: Arc<DefaultModels>,
     person_registry: PersonRegistrySqlite,
 }
 
@@ -30,7 +31,7 @@ impl Debug for FaceRecognizer {
 }
 
 impl FaceRecognizer {
-    pub fn new(default_models: DefaultModels, person_registry: PersonRegistrySqlite) -> Self {
+    pub fn new(default_models: Arc<DefaultModels>, person_registry: PersonRegistrySqlite) -> Self {
         Self {
             models: default_models,
             person_registry,
