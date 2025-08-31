@@ -11,9 +11,11 @@ use indicatif::ProgressState;
 use once_cell::sync::Lazy;
 use std::fs::DirEntry;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{fs, io};
+use tokio::task::JoinSet;
 use tracing::level_filters::LevelFilter;
+use tracing::{error, info};
 use tracing_indicatif::IndicatifLayer;
 use tracing_indicatif::style::ProgressStyle;
 use tracing_subscriber::fmt::format;
@@ -37,8 +39,26 @@ fn elapsed_subsec(state: &ProgressState, writer: &mut dyn std::fmt::Write) {
     let _ = writer.write_str(&format!("{}.{}s", seconds, sub_seconds));
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    let worker_threads = (cores / 4 * 3).max(1);
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .enable_all()
+        .build()?;
+
+    rt.block_on(async {
+        main_inner().await?;
+        Ok::<_, Box<dyn std::error::Error>>(())
+    })?;
+
+    Ok(())
+}
+
+async fn main_inner() -> Result<(), Box<dyn std::error::Error>> {
     // force early init of the project dirs to handle panic
     let _ = PROJECT_DIRS.data_dir();
 
@@ -95,7 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let models = DefaultModels::default();
     let persons_registry = PersonRegistrySqlite::initialize().await;
-    let mut recognizer = FaceRecognizer::new(models, persons_registry);
+    let mut recognizer = FaceRecognizer::new(models, persons_registry.clone());
 
     let cmd = clap::Command::new("face-recognizer")
         .subcommand_required(true)
@@ -115,6 +135,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cmd.get_matches().subcommand() {
         Some(("recognize", matches)) => {
+            let recognize_start = Instant::now();
+
             let input = matches.get_one::<PathBuf>("input").unwrap();
             let skip_processed_check = matches.get_flag("skip-processed-check");
 
@@ -123,16 +145,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             if input.is_dir() {
+                let mut join_set = JoinSet::new();
+
                 for entry in WalkDir::new(input)
                     .into_iter()
                     .filter_map(|e| e.ok())
                     .filter(|e| e.path().is_file())
                 {
-                    recognizer.process_file(&entry.path(), options).await;
+                    let sqlite = persons_registry.clone();
+                    let path = entry.path().to_path_buf();
+
+                    join_set.spawn(async move {
+                        let models = DefaultModels::default();
+                        let mut recognizer = FaceRecognizer::new(models, sqlite);
+
+                        recognizer.process_file(&path, options).await;
+                    });
+                }
+
+                while let Some(res) = join_set.join_next().await {
+                    if let Err(err) = res {
+                        error!("task failed: {}", err);
+                    }
                 }
             } else if input.is_file() {
                 recognizer.process_file(&input, options).await;
             }
+
+            info!(
+                "recognizing faces finished in: {:?}",
+                recognize_start.elapsed()
+            );
         }
         Some(("locate", matches)) => {
             let encoding_id = *matches.get_one::<i64>("ID").unwrap();

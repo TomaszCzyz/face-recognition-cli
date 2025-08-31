@@ -12,6 +12,7 @@ use zerocopy::IntoBytes;
 
 type Db = Pool<Sqlite>;
 
+#[derive(Clone)]
 pub(crate) struct PersonRegistrySqlite {
     db: Db,
 }
