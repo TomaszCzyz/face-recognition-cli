@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 
-use crate::face_recognizer::FaceRecognizer;
+use crate::face_recognizer::{FaceRecognizer, FaceRecognizerOptions};
 use crate::person_registry::person_registry_sqlite::PersonRegistrySqlite;
+use clap::{Arg, ArgAction};
 use directories::ProjectDirs;
 use dlib_wrappers::face_detection::FaceDetectorCnn;
 use dlib_wrappers::face_encoding::FaceEncodingNetwork;
@@ -103,12 +104,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 clap::arg!(<input> "a path to a file to analyse")
                     .value_parser(clap::value_parser!(PathBuf)),
                 clap::arg!(--"names-path" <PATH>).value_parser(clap::value_parser!(PathBuf)),
+                Arg::new("skip-processed-check")
+                    .long("skip-processed-check")
+                    .action(ArgAction::SetTrue),
             ]),
         );
 
     match cmd.get_matches().subcommand() {
         Some(("recognize", matches)) => {
             let input = matches.get_one::<PathBuf>("input").unwrap();
+            let skip_processed_check = matches.get_flag("skip-processed-check");
+
+            let options = FaceRecognizerOptions {
+                skip_processed_check,
+            };
 
             if input.is_dir() {
                 for entry in WalkDir::new(input)
@@ -116,10 +125,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .filter_map(|e| e.ok())
                     .filter(|e| e.path().is_file())
                 {
-                    recognizer.process_file(&entry.path()).await;
+                    recognizer.process_file(&entry.path(), options).await;
                 }
             } else if input.is_file() {
-                recognizer.process_file(&input).await;
+                recognizer.process_file(&input, options).await;
             }
         }
         _ => unreachable!("clap should ensure we don't get here"),

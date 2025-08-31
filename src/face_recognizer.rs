@@ -19,6 +19,11 @@ pub struct FaceRecognizer {
     person_registry: PersonRegistrySqlite,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct FaceRecognizerOptions {
+    pub(crate) skip_processed_check: bool,
+}
+
 impl Debug for FaceRecognizer {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "FaceRecognizer")
@@ -33,19 +38,22 @@ impl FaceRecognizer {
         }
     }
 
-    #[instrument(skip(self), name = "processing file")]
-    pub async fn process_file(&mut self, input: &Path) {
+    #[instrument(skip(self, options), name = "processing file")]
+    pub async fn process_file(&mut self, input: &Path, options: FaceRecognizerOptions) {
         let mut image = open(input).unwrap().to_rgb8();
 
         let hash = blake3::hash(image.as_raw());
+        let mut is_processed = false;
 
-        match self.person_registry.find_file(&hash).await {
-            Some((_id, path, processed_at)) => {
+        let file_id = match self.person_registry.find_file(&hash).await {
+            Some((id, path, processed_at)) => {
+                // todo: update file path if different
                 info!(
                     "the file has already been processed at {}, its path was: {}",
                     processed_at, path
                 );
-                return;
+                is_processed = true;
+                id
             }
             None => {
                 self.person_registry
@@ -57,26 +65,34 @@ impl FaceRecognizer {
             }
         };
 
-        self.detect(&mut image);
+        if is_processed && !options.skip_processed_check {
+            return;
+        }
+
+        self.detect(&mut image, file_id).await;
 
         let output = get_output_path(input);
         image.save(&output).unwrap();
     }
 
     #[instrument(skip(self, image), name = "detecting faces")]
-    fn detect(&mut self, image: &mut RgbImage) {
+    async fn detect(&mut self, image: &mut RgbImage, file_id: i64) {
         let start = Instant::now();
         let matrix = ImageMatrix::from_image(&image);
 
         let face_locations = self.find_face_locations(&matrix);
 
-        // todo: save face locations
+        for face_location_rect in face_locations.iter() {
+            let face_location_id = self
+                .person_registry
+                .add_face_location(file_id, &face_location_rect)
+                .await;
 
-        for r in face_locations.iter() {
-            let landmarks = self.find_landmarks(&matrix, &r);
+            let landmarks = self.find_landmarks(&matrix, &face_location_rect);
             let encodings = self.calculate_face_encoding(&matrix, &landmarks);
 
             for encoding in encodings.iter() {
+                info!("calculated encoding!!!");
                 if let Some(name) = self.person_registry.get(encoding) {
                     debug!("found person in registry: {}", name);
                 } else {
@@ -89,30 +105,6 @@ impl FaceRecognizer {
         info!("finished {:?}", start.elapsed());
     }
 
-    fn calculate_face_encoding(
-        &mut self,
-        matrix: &ImageMatrix,
-        landmarks: &FaceLandmarks,
-    ) -> FaceEncodings {
-        let face_encoding_start = Instant::now();
-        let encodings =
-            self.models
-                .face_encoding
-                .get_face_encodings(&matrix, &[landmarks.clone()], 0);
-
-        HISTOGRAM_F_E.record(
-            face_encoding_start.elapsed().as_millis() as u64,
-            &[KeyValue::new("file", "file_name")],
-        );
-
-        debug!(
-            "calculating encodings took: {:?}",
-            face_encoding_start.elapsed()
-        );
-
-        encodings
-    }
-
     fn find_landmarks(&mut self, matrix: &ImageMatrix, r: &Rectangle) -> FaceLandmarks {
         let landmarks_start = Instant::now();
         let landmarks = self.models.landmarks_predictor.face_landmarks(&matrix, &r);
@@ -121,6 +113,8 @@ impl FaceRecognizer {
             landmarks_start.elapsed().as_millis() as u64,
             &[KeyValue::new("file", "file_name")],
         );
+
+        info!("finding landmarks took: {:?}", landmarks_start.elapsed());
 
         landmarks
     }
@@ -141,5 +135,29 @@ impl FaceRecognizer {
         );
 
         face_locations
+    }
+
+    fn calculate_face_encoding(
+        &mut self,
+        matrix: &ImageMatrix,
+        landmarks: &FaceLandmarks,
+    ) -> FaceEncodings {
+        let face_encoding_start = Instant::now();
+        let encodings =
+            self.models
+                .face_encoding
+                .get_face_encodings(&matrix, &[landmarks.clone()], 0);
+
+        HISTOGRAM_F_E.record(
+            face_encoding_start.elapsed().as_millis() as u64,
+            &[KeyValue::new("file", "file_name")],
+        );
+
+        info!(
+            "calculating encodings took: {:?}",
+            face_encoding_start.elapsed()
+        );
+
+        encodings
     }
 }

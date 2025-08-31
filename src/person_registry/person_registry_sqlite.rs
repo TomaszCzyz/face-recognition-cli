@@ -1,6 +1,8 @@
 use crate::PROJECT_DIRS;
 use crate::person_registry::person_registry::PersonRegistry;
 use blake3::Hash;
+use dlib_wrappers::Rectangle;
+use dlib_wrappers::face_detection::FaceLocations;
 use dlib_wrappers::face_encoding::FaceEncoding;
 use sqlite_vec::sqlite3_vec_init;
 use sqlx::types::chrono::{DateTime, Utc};
@@ -22,8 +24,8 @@ pub struct ProcessedFileInsert {
 }
 
 impl PersonRegistrySqlite {
-    pub async fn find_file(&self, hash: &Hash) -> Option<(i32, String, DateTime<Utc>)> {
-        let maybe_hash: Option<(i32, String, DateTime<Utc>)> =
+    pub async fn find_file(&self, hash: &Hash) -> Option<(i64, String, DateTime<Utc>)> {
+        let maybe_hash: Option<(i64, String, DateTime<Utc>)> =
             sqlx::query_as("SELECT Id, Path, ProcessedAt FROM ProcessedFiles WHERE Hash = $1")
                 .bind(&hash.as_bytes()[..])
                 .fetch_optional(&self.db)
@@ -33,16 +35,16 @@ impl PersonRegistrySqlite {
         maybe_hash
     }
 
-    pub async fn add_file(&self, file: ProcessedFileInsert) -> Option<bool> {
+    pub async fn add_file(&self, file: ProcessedFileInsert) -> i64 {
         info!("inserting a new hash for file {}", file.path);
-        let _ = sqlx::query("INSERT INTO ProcessedFiles (Hash, Path) VALUES ($1, $2)")
+        let res = sqlx::query("INSERT INTO ProcessedFiles (Hash, Path) VALUES ($1, $2)")
             .bind(&file.hash.as_bytes()[..])
             .bind(&file.path)
             .execute(&self.db)
             .await
             .unwrap();
 
-        Some(true)
+        res.last_insert_rowid()
     }
 
     /// Gets all encodings with distance lower than a threshold from provided encoding
@@ -50,6 +52,28 @@ impl PersonRegistrySqlite {
         let string = "asd".to_string();
         Some(string)
         // todo!()
+    }
+
+    pub async fn add_face_location(&self, file_id: i64, face_location: &Rectangle) -> i64 {
+        let res = sqlx::query(
+            "INSERT INTO FaceLocations
+                     (Top, \"Left\",Bottom, \"Right\")
+                 VALUES
+                     ($1, $2, $3, $4)
+                 ",
+        )
+        .bind(face_location.top as i64)
+        .bind(face_location.left as i64)
+        .bind(face_location.bottom as i64)
+        .bind(face_location.right as i64)
+        .execute(&self.db)
+        .await
+        .unwrap();
+
+        let id = res.last_insert_rowid();
+
+        info!("inserted a new face locations: {id} for file: {file_id}");
+        id
     }
 
     pub fn add_encoding(&mut self, encoding: FaceEncoding, hash: Hash) {
