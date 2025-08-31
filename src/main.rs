@@ -148,8 +148,9 @@ async fn main_inner() -> Result<(), Box<dyn std::error::Error>> {
             if input.is_dir() {
                 // Limit concurrency to something reasonable. You can tune this.
                 let max_concurrency = std::thread::available_parallelism()
-                    .map(|n| n.get())
+                    .map(|n| n.get() / 2)
                     .unwrap_or(1);
+
                 let semaphore = Arc::new(Semaphore::new(max_concurrency));
                 let mut join_set = JoinSet::new();
 
@@ -201,6 +202,7 @@ async fn main_inner() -> Result<(), Box<dyn std::error::Error>> {
 
     // provider.shutdown()?;
 
+    println!("done");
     Ok(())
 }
 
