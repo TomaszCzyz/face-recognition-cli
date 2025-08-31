@@ -108,7 +108,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .long("skip-processed-check")
                     .action(ArgAction::SetTrue),
             ]),
-        );
+        )
+        .subcommand(clap::command!("locate").args(&[
+            clap::arg!(<ID> "a path to a file to analyse").value_parser(clap::value_parser!(i64)),
+        ]));
 
     match cmd.get_matches().subcommand() {
         Some(("recognize", matches)) => {
@@ -130,6 +133,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else if input.is_file() {
                 recognizer.process_file(&input, options).await;
             }
+        }
+        Some(("locate", matches)) => {
+            let encoding_id = *matches.get_one::<i64>("ID").unwrap();
+            let persons_registry_2 = PersonRegistrySqlite::initialize().await;
+
+            persons_registry_2.locate_similar(encoding_id).await;
         }
         _ => unreachable!("clap should ensure we don't get here"),
     };

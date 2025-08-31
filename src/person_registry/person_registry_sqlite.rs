@@ -1,8 +1,6 @@
 use crate::PROJECT_DIRS;
-use crate::person_registry::person_registry::PersonRegistry;
 use blake3::Hash;
 use dlib_wrappers::Rectangle;
-use dlib_wrappers::face_detection::FaceLocations;
 use dlib_wrappers::face_encoding::FaceEncoding;
 use sqlite_vec::sqlite3_vec_init;
 use sqlx::types::chrono::{DateTime, Utc};
@@ -10,6 +8,7 @@ use sqlx::{FromRow, Pool, Sqlite, sqlite::SqlitePoolOptions};
 use std::fs;
 use std::fs::OpenOptions;
 use tracing::info;
+use zerocopy::IntoBytes;
 
 type Db = Pool<Sqlite>;
 
@@ -35,6 +34,30 @@ impl PersonRegistrySqlite {
         maybe_hash
     }
 
+    pub async fn locate_similar(&self, encoding_id: i64) {
+        let res: Vec<(i64, f32)> = sqlx::query_as(
+            "
+            -- noinspection SqlResolve
+            SELECT
+              fe.id,
+              vec_distance_L2(fe.FaceEncoding, q.vec) AS distance
+            FROM FaceEncodings AS fe
+            CROSS JOIN (SELECT FaceEncoding AS vec FROM FaceEncodings WHERE id = $1) AS q
+            WHERE distance > 0.6
+            ORDER BY distance DESC
+            LIMIT 30;
+            ",
+        )
+        .bind(&encoding_id)
+        .fetch_all(&self.db)
+        .await
+        .unwrap();
+
+        for (id, dist) in res.iter() {
+            println!("{id}: distance: {dist}")
+        }
+    }
+
     pub async fn add_file(&self, file: ProcessedFileInsert) -> i64 {
         info!("inserting a new hash for file {}", file.path);
         let res = sqlx::query("INSERT INTO ProcessedFiles (Hash, Path) VALUES ($1, $2)")
@@ -47,14 +70,7 @@ impl PersonRegistrySqlite {
         res.last_insert_rowid()
     }
 
-    /// Gets all encodings with distance lower than a threshold from provided encoding
-    pub fn get(&self, encoding: &FaceEncoding) -> Option<String> {
-        let string = "asd".to_string();
-        Some(string)
-        // todo!()
-    }
-
-    pub async fn add_face_location(&self, file_id: i64, face_location: &Rectangle) -> i64 {
+    pub async fn add_face_location(&self, face_location: &Rectangle) -> i64 {
         let res = sqlx::query(
             "INSERT INTO FaceLocations
                      (Top, \"Left\",Bottom, \"Right\")
@@ -72,19 +88,50 @@ impl PersonRegistrySqlite {
 
         let id = res.last_insert_rowid();
 
-        info!("inserted a new face locations: {id} for file: {file_id}");
+        info!("inserted a new face locations: {id}");
         id
     }
 
-    pub fn add_encoding(&mut self, encoding: FaceEncoding, hash: Hash) {
-        info!("inserting a new encoding");
+    pub(crate) async fn add_face_encoding(&self, face_encoding: &FaceEncoding) -> i64 {
+        let floats_f32: Vec<f32> = face_encoding.to_vec().iter().map(|&d| d as f32).collect();
 
-        // let _ = sqlx::query("INSERT INTO ProcessedFiles (Hash, Path) VALUES ($1, $2)")
-        //     .bind(&file.hash.as_bytes()[..])
-        //     .bind(&file.path)
-        //     .execute(&self.db)
-        //     .await
-        //     .unwrap();
+        let res = sqlx::query(
+            "INSERT INTO FaceEncodings
+                     (FaceEncoding)
+                 VALUES
+                     ($1)
+                 ",
+        )
+        .bind(floats_f32.as_bytes())
+        .execute(&self.db)
+        .await
+        .unwrap();
+
+        let id = res.last_insert_rowid();
+
+        info!("inserted a new face encoding: {id}");
+        id
+    }
+
+    pub(crate) async fn add_face(&self, file_id: i64, location_id: i64, encoding_id: i64) -> i64 {
+        let res = sqlx::query(
+            "INSERT INTO Faces
+                     (FileId, EncodingId, LocationId)
+                 VALUES
+                     ($1, $2, $3)
+                ",
+        )
+        .bind(file_id)
+        .bind(location_id)
+        .bind(encoding_id)
+        .execute(&self.db)
+        .await
+        .unwrap();
+
+        let id = res.last_insert_rowid();
+
+        info!("inserted a new face: {id}");
+        id
     }
 }
 
@@ -110,7 +157,7 @@ impl PersonRegistrySqlite {
         let result = OpenOptions::new().create(true).write(true).open(&path);
 
         match result {
-            Ok(_) => println!("database file created"),
+            Ok(_) => {}
             Err(err) => panic!("error creating database file {}", err),
         }
 
@@ -126,7 +173,6 @@ impl PersonRegistrySqlite {
             .unwrap();
 
         info!("Executing migrations...");
-        println!("Executing migrations...");
         sqlx::migrate!("./src/migrations").run(&db).await.unwrap();
 
         let version: (String,) = sqlx::query_as("SELECT sqlite_version();")
@@ -134,10 +180,15 @@ impl PersonRegistrySqlite {
             .await
             .unwrap();
 
-        let vec_version: (String,) = sqlx::query_as("SELECT vec_version();")
-            .fetch_one(&db)
-            .await
-            .unwrap();
+        let vec_version: (String,) = sqlx::query_as(
+            "
+            -- noinspection SqlResolve
+            SELECT vec_version();
+            ",
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
 
         println!("sqlite version: {:?}", version);
         println!("vec version: {:?}", vec_version);
