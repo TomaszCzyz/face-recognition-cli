@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cores = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
-    let worker_threads = (cores / 4 * 3).max(1);
+    let worker_threads = (cores / 2).max(1);
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(worker_threads)
@@ -76,10 +76,10 @@ async fn main_inner() -> Result<(), Box<dyn std::error::Error>> {
                 |state: &ProgressState, writer: &mut dyn std::fmt::Write| {
                     let elapsed = state.elapsed();
 
-                    if elapsed > Duration::from_secs(8) {
+                    if elapsed > Duration::from_secs(30) {
                         // Red
                         let _ = write!(writer, "\x1b[{}m", 1 + 30);
-                    } else if elapsed > Duration::from_secs(4) {
+                    } else if elapsed > Duration::from_secs(15) {
                         // Yellow
                         let _ = write!(writer, "\x1b[{}m", 3 + 30);
                     }
@@ -179,9 +179,7 @@ async fn main_inner() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(("locate", matches)) => {
             let encoding_id = *matches.get_one::<i64>("ID").unwrap();
-            let persons_registry_2 = PersonRegistrySqlite::initialize().await;
-
-            persons_registry_2.locate_similar(encoding_id).await;
+            persons_registry.locate_similar(encoding_id).await;
         }
         _ => unreachable!("clap should ensure we don't get here"),
     };
