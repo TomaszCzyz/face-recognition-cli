@@ -11,13 +11,9 @@ use indicatif::ProgressState;
 use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::sync::Semaphore;
-use tokio::task::JoinSet;
+use std::time::Instant;
+use tracing::info;
 use tracing::level_filters::LevelFilter;
-use tracing::{error, info};
-use tracing_indicatif::IndicatifLayer;
-use tracing_indicatif::style::ProgressStyle;
 use tracing_subscriber::fmt::format;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -58,6 +54,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let persons_registry = PersonRegistrySqlite::initialize().await;
+    let models = Arc::new(DefaultModels::default());
+    let recognizer = FaceRecognizer::new(models.clone(), persons_registry.clone());
 
     let cmd = clap::Command::new("face-recognizer")
         .subcommand_required(true)
@@ -92,20 +90,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .filter_map(|e| e.ok())
                     .filter(|e| e.path().is_file())
                 {
-                    let sqlite = persons_registry.clone();
                     let path = entry.path().to_path_buf();
-
-                    let models = Arc::new(DefaultModels::default());
-                    let models = models.clone();
-
-                    let mut recognizer = FaceRecognizer::new(models, sqlite);
-
                     recognizer.process_file(&path, options).await;
                 }
             } else if input.is_file() {
-                let models = DefaultModels::default();
-                let mut recognizer = FaceRecognizer::new(models.into(), persons_registry.clone());
-
                 recognizer.process_file(&input, options).await;
             }
 

@@ -1,10 +1,10 @@
 use crate::PROJECT_DIRS;
 use blake3::Hash;
-use dlib_wrappers::face_encoding::FaceEncoding;
 use dlib_wrappers::Rectangle;
+use dlib_wrappers::face_encoding::FaceEncoding;
 use sqlite_vec::sqlite3_vec_init;
 use sqlx::types::chrono::{DateTime, Utc};
-use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
+use sqlx::{Pool, Sqlite, sqlite::SqlitePoolOptions};
 use std::fs;
 use std::fs::OpenOptions;
 use tracing::info;

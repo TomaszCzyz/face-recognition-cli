@@ -1,13 +1,16 @@
+use crate::DefaultModels;
 use crate::otel::{HISTOGRAM_F_D, HISTOGRAM_F_E, HISTOGRAM_L_P};
 use crate::person_registry::person_registry_sqlite::{PersonRegistrySqlite, ProcessedFileInsert};
-use crate::{DefaultModels};
+use blake3::Hash;
 use dlib_wrappers::face_detection::{FaceDetectorModel, FaceLocations};
 use dlib_wrappers::face_encoding::FaceEncodings;
 use dlib_wrappers::landmark_prediction::FaceLandmarks;
 use dlib_wrappers::{ImageMatrix, Rectangle};
 use image::{RgbImage, open};
+use memmap2::Mmap;
 use opentelemetry::KeyValue;
 use std::fmt::{Debug, Formatter};
+use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -31,18 +34,17 @@ impl Debug for FaceRecognizer {
 }
 
 impl FaceRecognizer {
-    pub fn new(default_models: Arc<DefaultModels>, person_registry: PersonRegistrySqlite) -> Self {
+    pub fn new(models: Arc<DefaultModels>, person_registry: PersonRegistrySqlite) -> Self {
         Self {
-            models: default_models,
+            models,
             person_registry,
         }
     }
 
     #[instrument(skip(self, options), name = "processing file")]
-    pub async fn process_file(&mut self, input: &Path, options: FaceRecognizerOptions) {
-        let mut image = open(input).unwrap().to_rgb8();
+    pub async fn process_file(&self, input: &Path, options: FaceRecognizerOptions) {
+        let hash = Self::calc_hash(input);
 
-        let hash = blake3::hash(image.as_raw());
         let mut is_processed = false;
 
         let file_id = match self.person_registry.find_file(&hash).await {
@@ -75,11 +77,12 @@ impl FaceRecognizer {
             return;
         }
 
+        let mut image = open(input).unwrap().to_rgb8();
         self.detect(&mut image, file_id).await;
     }
 
     #[instrument(skip(self, image), name = "detecting faces")]
-    async fn detect(&mut self, image: &mut RgbImage, file_id: i64) {
+    async fn detect(&self, image: &mut RgbImage, file_id: i64) {
         let start = Instant::now();
         let matrix = ImageMatrix::from_image(&image);
 
@@ -88,7 +91,7 @@ impl FaceRecognizer {
         let encodings = self.calculate_face_encodings(&matrix, faces_landmarks.as_slice());
 
         for (location_rect, encoding) in face_locations.iter().zip(encodings.iter()) {
-            let _face_id = self
+            _ = self
                 .person_registry
                 .add_face(Some(file_id), encoding, location_rect)
                 .await;
@@ -97,11 +100,14 @@ impl FaceRecognizer {
         info!("finished {:?}", start.elapsed());
     }
 
-    fn find_landmarks(
-        &mut self,
-        matrix: &ImageMatrix,
-        rectangles: &[Rectangle],
-    ) -> Vec<FaceLandmarks> {
+    fn calc_hash(input: &Path) -> Hash {
+        let file = File::open(input).unwrap();
+        let mmap = unsafe { Mmap::map(&file).unwrap() };
+
+        blake3::hash(&mmap)
+    }
+
+    fn find_landmarks(&self, matrix: &ImageMatrix, rectangles: &[Rectangle]) -> Vec<FaceLandmarks> {
         let landmarks_start = Instant::now();
 
         let all_landmarks = rectangles
@@ -123,7 +129,7 @@ impl FaceRecognizer {
         all_landmarks
     }
 
-    fn find_face_locations(&mut self, matrix: &ImageMatrix) -> FaceLocations {
+    fn find_face_locations(&self, matrix: &ImageMatrix) -> FaceLocations {
         let face_locations_start = Instant::now();
         let face_locations = self.models.face_detector.face_locations(&matrix);
 
@@ -142,7 +148,7 @@ impl FaceRecognizer {
     }
 
     fn calculate_face_encodings(
-        &mut self,
+        &self,
         matrix: &ImageMatrix,
         landmarks: &[FaceLandmarks],
     ) -> FaceEncodings {
