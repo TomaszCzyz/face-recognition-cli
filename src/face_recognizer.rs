@@ -76,9 +76,6 @@ impl FaceRecognizer {
         }
 
         self.detect(&mut image, file_id).await;
-
-        // let output = get_output_path(input);
-        // image.save(&output).unwrap();
     }
 
     #[instrument(skip(self, image), name = "detecting faces")]
@@ -91,11 +88,9 @@ impl FaceRecognizer {
         let encodings = self.calculate_face_encodings(&matrix, faces_landmarks.as_slice());
 
         for (location_rect, encoding) in face_locations.iter().zip(encodings.iter()) {
-            let face_location_id = self.person_registry.add_face_location(location_rect).await;
-            let face_encoding_id = self.person_registry.add_face_encoding(encoding).await;
             let _face_id = self
                 .person_registry
-                .add_face(file_id, face_location_id, face_encoding_id)
+                .add_face(Some(file_id), encoding, location_rect)
                 .await;
         }
 

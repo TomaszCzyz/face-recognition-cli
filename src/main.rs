@@ -7,7 +7,6 @@ use directories::ProjectDirs;
 use dlib_wrappers::face_detection::FaceDetectorCnn;
 use dlib_wrappers::face_encoding::FaceEncodingNetwork;
 use dlib_wrappers::landmark_prediction::LandmarkPredictor;
-use futures::stream::{self, StreamExt};
 use indicatif::ProgressState;
 use once_cell::sync::Lazy;
 use std::fs::DirEntry;
@@ -146,7 +145,6 @@ async fn main_inner() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             if input.is_dir() {
-                // Limit concurrency to something reasonable. You can tune this.
                 let max_concurrency = std::thread::available_parallelism()
                     .map(|n| n.get() / 2)
                     .unwrap_or(1);

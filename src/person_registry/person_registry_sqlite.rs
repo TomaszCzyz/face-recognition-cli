@@ -1,10 +1,10 @@
 use crate::PROJECT_DIRS;
 use blake3::Hash;
-use dlib_wrappers::Rectangle;
 use dlib_wrappers::face_encoding::FaceEncoding;
+use dlib_wrappers::Rectangle;
 use sqlite_vec::sqlite3_vec_init;
 use sqlx::types::chrono::{DateTime, Utc};
-use sqlx::{FromRow, Pool, Sqlite, sqlite::SqlitePoolOptions};
+use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
 use std::fs;
 use std::fs::OpenOptions;
 use tracing::info;
@@ -17,7 +17,6 @@ pub(crate) struct PersonRegistrySqlite {
     db: Db,
 }
 
-#[derive(FromRow)]
 pub struct ProcessedFileInsert {
     pub hash: Hash,
     pub path: String,
@@ -25,38 +24,11 @@ pub struct ProcessedFileInsert {
 
 impl PersonRegistrySqlite {
     pub async fn find_file(&self, hash: &Hash) -> Option<(i64, String, DateTime<Utc>)> {
-        let maybe_hash: Option<(i64, String, DateTime<Utc>)> =
-            sqlx::query_as("SELECT Id, Path, ProcessedAt FROM ProcessedFiles WHERE Hash = $1")
-                .bind(&hash.as_bytes()[..])
-                .fetch_optional(&self.db)
-                .await
-                .unwrap();
-
-        maybe_hash
-    }
-
-    pub async fn locate_similar(&self, encoding_id: i64) {
-        let res: Vec<(i64, f32)> = sqlx::query_as(
-            "
-            -- noinspection SqlResolve
-            SELECT
-              fe.id,
-              vec_distance_L2(fe.FaceEncoding, q.vec) AS distance
-            FROM FaceEncodings AS fe
-            CROSS JOIN (SELECT FaceEncoding AS vec FROM FaceEncodings WHERE id = $1) AS q
-            WHERE distance > 0.6
-            ORDER BY distance DESC
-            LIMIT 30;
-            ",
-        )
-        .bind(&encoding_id)
-        .fetch_all(&self.db)
-        .await
-        .unwrap();
-
-        for (id, dist) in res.iter() {
-            println!("{id}: distance: {dist}")
-        }
+        sqlx::query_as("SELECT Id, Path, ProcessedAt FROM ProcessedFiles WHERE Hash = $1")
+            .bind(&hash.as_bytes()[..])
+            .fetch_optional(&self.db)
+            .await
+            .unwrap()
     }
 
     pub async fn add_file(&self, file: ProcessedFileInsert) -> i64 {
@@ -71,60 +43,51 @@ impl PersonRegistrySqlite {
         res.last_insert_rowid()
     }
 
-    pub async fn add_face_location(&self, face_location: &Rectangle) -> i64 {
-        let res = sqlx::query(
-            "INSERT INTO FaceLocations
-                     (Top, \"Left\",Bottom, \"Right\")
-                 VALUES
-                     ($1, $2, $3, $4)
-                 ",
+    pub async fn locate_similar(&self, face_id: i64) {
+        let res: Vec<(i64, f32)> = sqlx::query_as(
+            "
+            -- noinspection SqlResolve
+            SELECT
+              f.id,
+              vec_distance_L2(f.FaceEncoding, q.vec) AS distance
+            FROM Faces AS f
+            CROSS JOIN (SELECT FaceEncoding AS vec FROM Faces WHERE id = $1) AS q
+            WHERE distance > 0.6
+            ORDER BY distance DESC
+            LIMIT 30;
+            ",
         )
-        .bind(face_location.top as i64)
-        .bind(face_location.left as i64)
-        .bind(face_location.bottom as i64)
-        .bind(face_location.right as i64)
-        .execute(&self.db)
+        .bind(face_id)
+        .fetch_all(&self.db)
         .await
         .unwrap();
 
-        let id = res.last_insert_rowid();
-
-        info!("inserted a new face locations: {id}");
-        id
+        for (id, dist) in res.iter() {
+            println!("{id}: distance: {dist}")
+        }
     }
 
-    pub(crate) async fn add_face_encoding(&self, face_encoding: &FaceEncoding) -> i64 {
-        let floats_f32: Vec<f32> = face_encoding.to_vec().iter().map(|&d| d as f32).collect();
+    pub(crate) async fn add_face(
+        &self,
+        file_id: Option<i64>,
+        encoding: &FaceEncoding,
+        location: &Rectangle,
+    ) -> i64 {
+        let floats_f32: Vec<f32> = encoding.to_vec().iter().map(|&d| d as f32).collect();
 
-        let res = sqlx::query(
-            "INSERT INTO FaceEncodings
-                     (FaceEncoding)
-                 VALUES
-                     ($1)
-                 ",
-        )
-        .bind(floats_f32.as_bytes())
-        .execute(&self.db)
-        .await
-        .unwrap();
-
-        let id = res.last_insert_rowid();
-
-        info!("inserted a new face encoding: {id}");
-        id
-    }
-
-    pub(crate) async fn add_face(&self, file_id: i64, location_id: i64, encoding_id: i64) -> i64 {
         let res = sqlx::query(
             "INSERT INTO Faces
-                     (FileId, EncodingId, LocationId)
+                     (FileId, FaceEncoding, RectLeft, RectTop, RectRight, RectBottom)
                  VALUES
-                     ($1, $2, $3)
+                     ($1, $2, $3, $4, $5, $6)
                 ",
         )
         .bind(file_id)
-        .bind(location_id)
-        .bind(encoding_id)
+        .bind(floats_f32.as_bytes())
+        .bind(location.left as i64)
+        .bind(location.top as i64)
+        .bind(location.right as i64)
+        .bind(location.bottom as i64)
         .execute(&self.db)
         .await
         .unwrap();
