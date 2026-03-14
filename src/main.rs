@@ -39,79 +39,23 @@ fn elapsed_subsec(state: &ProgressState, writer: &mut dyn std::fmt::Write) {
     let _ = writer.write_str(&format!("{}.{}s", seconds, sub_seconds));
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cores = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1);
-    let worker_threads = (cores / 2).max(1);
-
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(worker_threads)
-        .enable_all()
-        .build()?;
-
-    rt.block_on(async {
-        main_inner().await?;
-        Ok::<_, Box<dyn std::error::Error>>(())
-    })?;
-
-    Ok(())
-}
-
-async fn main_inner() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // force early init of the project dirs to handle panic
     let _ = PROJECT_DIRS.data_dir();
 
-    let indicatif_layer = IndicatifLayer::new().with_progress_style(
-        ProgressStyle::with_template(
-            "{color_start}{span_child_prefix}{span_fields} -- {span_name} {wide_msg} {elapsed_subsec}{color_end}",
-        )
-            .unwrap()
-            .with_key(
-                "elapsed_subsec",
-                elapsed_subsec,
-            )
-            .with_key(
-                "color_start",
-                |state: &ProgressState, writer: &mut dyn std::fmt::Write| {
-                    let elapsed = state.elapsed();
-
-                    if elapsed > Duration::from_secs(30) {
-                        // Red
-                        let _ = write!(writer, "\x1b[{}m", 1 + 30);
-                    } else if elapsed > Duration::from_secs(15) {
-                        // Yellow
-                        let _ = write!(writer, "\x1b[{}m", 3 + 30);
-                    }
-                },
-            )
-            .with_key(
-                "color_end",
-                |state: &ProgressState, writer: &mut dyn std::fmt::Write| {
-                    if state.elapsed() > Duration::from_secs(4) {
-                        let _ =write!(writer, "\x1b[0m");
-                    }
-                },
-            ),
-    ).with_span_child_prefix_symbol("↳ ").with_span_child_prefix_indent(" ");
-
     tracing_subscriber::registry()
         .with(
-            tracing_subscriber::fmt::layer()
-                .with_writer(indicatif_layer.get_stderr_writer())
-                .event_format(
-                    format()
-                        .with_level(false)
-                        .with_target(false)
-                        .without_time()
-                        .with_source_location(false),
-                ),
+            tracing_subscriber::fmt::layer().event_format(
+                format()
+                    .with_level(false)
+                    .with_target(false)
+                    .without_time()
+                    .with_source_location(false),
+            ),
         )
-        .with(indicatif_layer)
         .with(LevelFilter::INFO)
         .init();
-
-    // let provider = init_metrics();
 
     let persons_registry = PersonRegistrySqlite::initialize().await;
 
@@ -143,39 +87,20 @@ async fn main_inner() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             if input.is_dir() {
-                let max_concurrency = std::thread::available_parallelism()
-                    .map(|n| n.get() / 2)
-                    .unwrap_or(1);
-
-                let semaphore = Arc::new(Semaphore::new(max_concurrency));
-                let mut join_set = JoinSet::new();
-
                 for entry in WalkDir::new(input)
                     .into_iter()
                     .filter_map(|e| e.ok())
                     .filter(|e| e.path().is_file())
                 {
                     let sqlite = persons_registry.clone();
-                    let permit = semaphore.clone().acquire_owned().await.unwrap();
                     let path = entry.path().to_path_buf();
 
                     let models = Arc::new(DefaultModels::default());
+                    let models = models.clone();
 
-                    join_set.spawn(async move {
-                        // Hold the permit for the duration of the task
-                        let _permit = permit;
-                        let models = models.clone();
+                    let mut recognizer = FaceRecognizer::new(models, sqlite);
 
-                        let mut recognizer = FaceRecognizer::new(models, sqlite);
-
-                        recognizer.process_file(&path, options).await;
-                    });
-                }
-
-                while let Some(res) = join_set.join_next().await {
-                    if let Err(err) = res {
-                        error!("task failed: {}", err);
-                    }
+                    recognizer.process_file(&path, options).await;
                 }
             } else if input.is_file() {
                 let models = DefaultModels::default();
