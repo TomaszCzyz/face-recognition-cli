@@ -7,6 +7,7 @@ use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::{Pool, Sqlite, sqlite::SqlitePoolOptions};
 use std::fs;
 use std::fs::OpenOptions;
+use std::path::Path;
 use tracing::info;
 use zerocopy::IntoBytes;
 
@@ -22,6 +23,20 @@ pub struct ProcessedFileInsert {
     pub path: String,
 }
 
+impl ProcessedFileInsert {
+    pub fn new(hash: Hash, path: &Path) -> Self {
+        let canonical_path = fs::canonicalize(&path)
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+
+        Self {
+            hash,
+            path: canonical_path,
+        }
+    }
+}
+
 impl PersonRegistrySqlite {
     pub async fn find_file(&self, hash: &Hash) -> Option<(i64, String, DateTime<Utc>)> {
         sqlx::query_as("SELECT Id, Path, ProcessedAt FROM ProcessedFiles WHERE Hash = $1")
@@ -32,7 +47,6 @@ impl PersonRegistrySqlite {
     }
 
     pub async fn add_file(&self, file: ProcessedFileInsert) -> i64 {
-        info!("inserting a new hash for file {}", file.path);
         let res = sqlx::query("INSERT INTO ProcessedFiles (Hash, Path) VALUES ($1, $2)")
             .bind(&file.hash.as_bytes()[..])
             .bind(&file.path)
@@ -43,7 +57,7 @@ impl PersonRegistrySqlite {
         res.last_insert_rowid()
     }
 
-    pub async fn locate_similar(&self, face_id: i64) {
+    pub async fn locate_similar(&self, face_id: i64) -> Vec<i64> {
         let res: Vec<(i64, f32)> = sqlx::query_as(
             "
             -- noinspection SqlResolve
@@ -65,6 +79,8 @@ impl PersonRegistrySqlite {
         for (id, dist) in res.iter() {
             println!("{id}: distance: {dist}")
         }
+
+        res.into_iter().map(|(id, _)| id).collect()
     }
 
     pub(crate) async fn add_face(
@@ -92,10 +108,7 @@ impl PersonRegistrySqlite {
         .await
         .unwrap();
 
-        let id = res.last_insert_rowid();
-
-        info!("inserted a new face: {id}");
-        id
+        res.last_insert_rowid()
     }
 }
 

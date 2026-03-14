@@ -157,7 +157,7 @@ impl fmt::Debug for FaceLocations {
 #[test]
 fn face_detection_test() {
     use image;
-    let image = image::open("benches/obama_1.jpg").unwrap().to_rgb();
+    let image = image::open("benches/obama_1.jpg").unwrap().to_rgb8();
     let matrix = ImageMatrix::from_image(&image);
     let detector = FaceDetector::new();
 

@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::face_recognizer::{FaceRecognizer, FaceRecognizerOptions};
+use crate::face_recognizer::{DetectResult, FaceRecognizer, FaceRecognizerOptions};
 use crate::person_registry::person_registry_sqlite::PersonRegistrySqlite;
 use clap::{Arg, ArgAction};
 use directories::ProjectDirs;
@@ -91,7 +91,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .filter(|e| e.path().is_file())
                 {
                     let path = entry.path().to_path_buf();
-                    recognizer.process_file(&path, options).await;
+                    match recognizer.process_file(&path, options).await {
+                        DetectResult::Skipped => {}
+                        DetectResult::NoFaces => info!("no faces found in {}", path.display()),
+                        DetectResult::FacesDetected(face_ids) => {
+                            info!("found {} faces in {}", face_ids.len(), path.display());
+
+                            for face_id in face_ids {
+                                let similar_face_ids = persons_registry.locate_similar(face_id).await;
+
+                                if !similar_face_ids.is_empty() {
+                                    info!("I do not recognize the person.. Could you tell who that is?");
+                                    // persons_registry.
+                                } else {
+                                    info!("no similar faces found for face id {}", face_id);
+                                }
+                            }
+                        }
+                    }
                 }
             } else if input.is_file() {
                 recognizer.process_file(&input, options).await;

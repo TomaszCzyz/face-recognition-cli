@@ -14,7 +14,6 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::fs;
 use tracing::{info, instrument};
 
 pub struct FaceRecognizer {
@@ -33,6 +32,21 @@ impl Debug for FaceRecognizer {
     }
 }
 
+pub(crate) enum DetectKind {
+    AllFacesKnown(Vec<i64>),
+    SomeFacesKnown {
+        known_ids: Vec<i64>,
+        unknown_ids: Vec<i64>,
+    },
+    NoFacesKnown(Vec<i64>),
+}
+
+pub(crate) enum DetectResult {
+    Skipped,
+    NoFaces,
+    FacesDetected(Vec<i64>),
+}
+
 impl FaceRecognizer {
     pub fn new(models: Arc<DefaultModels>, person_registry: PersonRegistrySqlite) -> Self {
         Self {
@@ -41,7 +55,8 @@ impl FaceRecognizer {
         }
     }
 
-    pub async fn process_file(&self, input: &Path, options: FaceRecognizerOptions) {
+    pub async fn process_file(&self, input: &Path, options: FaceRecognizerOptions) -> DetectResult {
+        info!("processing file {}", input.display());
         let hash = Self::calc_hash(input);
 
         let mut is_processed = false;
@@ -54,31 +69,28 @@ impl FaceRecognizer {
                 id
             }
             None => {
-                let canonical_path = fs::canonicalize(&input)
-                    .await
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string();
-
                 self.person_registry
-                    .add_file(ProcessedFileInsert {
-                        hash,
-                        path: canonical_path,
-                    })
+                    .add_file(ProcessedFileInsert::new(hash, input))
                     .await
             }
         };
 
         if is_processed && !options.skip_processed_check {
-            return;
+            return DetectResult::Skipped;
         }
 
         let mut image = open(input).unwrap().to_rgb8();
-        self.detect(&mut image, file_id).await;
+        let face_ids = self.detect(&mut image, file_id).await;
+
+        if face_ids.is_empty() {
+            return DetectResult::NoFaces;
+        }
+
+        DetectResult::FacesDetected(face_ids)
     }
 
     #[instrument(skip(self, image), name = "detecting faces")]
-    async fn detect(&self, image: &RgbImage, file_id: i64) {
+    async fn detect(&self, image: &RgbImage, file_id: i64) -> Vec<i64> {
         let start = Instant::now();
         let matrix = ImageMatrix::from_image(image);
 
@@ -86,14 +98,18 @@ impl FaceRecognizer {
         let faces_landmarks = self.find_landmarks(&matrix, &face_locations);
         let encodings = self.calculate_face_encodings(&matrix, faces_landmarks.as_slice());
 
+        let mut face_ids = Vec::with_capacity(face_locations.len());
         for (location_rect, encoding) in face_locations.iter().zip(encodings.iter()) {
-            _ = self
+            let face_id = self
                 .person_registry
                 .add_face(Some(file_id), encoding, location_rect)
                 .await;
+
+            face_ids.push(face_id);
         }
 
         info!("finished {:?}", start.elapsed());
+        face_ids
     }
 
     fn calc_hash(input: &Path) -> Hash {
