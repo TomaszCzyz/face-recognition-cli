@@ -41,19 +41,15 @@ impl FaceRecognizer {
         }
     }
 
-    #[instrument(skip(self, options), name = "processing file")]
     pub async fn process_file(&self, input: &Path, options: FaceRecognizerOptions) {
         let hash = Self::calc_hash(input);
 
         let mut is_processed = false;
 
         let file_id = match self.person_registry.find_file(&hash).await {
-            Some((id, path, processed_at)) => {
+            Some((id, _path, _processed_at)) => {
                 // todo: update file path if different
-                info!(
-                    "the file has already been processed at {}, its path was: {}",
-                    processed_at, path
-                );
+                info!("I already analyzed this file");
                 is_processed = true;
                 id
             }
@@ -82,9 +78,9 @@ impl FaceRecognizer {
     }
 
     #[instrument(skip(self, image), name = "detecting faces")]
-    async fn detect(&self, image: &mut RgbImage, file_id: i64) {
+    async fn detect(&self, image: &RgbImage, file_id: i64) {
         let start = Instant::now();
-        let matrix = ImageMatrix::from_image(&image);
+        let matrix = ImageMatrix::from_image(image);
 
         let face_locations = self.find_face_locations(&matrix);
         let faces_landmarks = self.find_landmarks(&matrix, &face_locations);
