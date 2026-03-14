@@ -9,11 +9,9 @@ use dlib_wrappers::face_encoding::FaceEncodingNetwork;
 use dlib_wrappers::landmark_prediction::LandmarkPredictor;
 use indicatif::ProgressState;
 use once_cell::sync::Lazy;
-use std::fs::DirEntry;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::{fs, io};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing::level_filters::LevelFilter;
@@ -239,27 +237,4 @@ impl Default for DefaultModels {
             .expect("Failed to load face encoding network"),
         }
     }
-}
-
-// async fn taker<F>(f: fn(One) -> F)
-// where
-//     F: Future<Output = Two>,
-// {
-//     let two = f(One).await;
-// }
-
-// one possible implementation of walking a directory only visiting files
-async fn visit_dirs(dir: &Path, cb: &mut dyn FnMut(&DirEntry)) -> io::Result<()> {
-    if dir.is_dir() {
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_dir() {
-                Box::pin(visit_dirs(&path, cb)).await?;
-            } else {
-                cb(&entry);
-            }
-        }
-    }
-    Ok(())
 }
